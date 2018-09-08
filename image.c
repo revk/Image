@@ -1,10 +1,10 @@
-// Image handling tools, (c) AJK 2001
+// Image handling tools
+// Copyright (c) 2001 Adrian Kennard
 // This software is provided under the terms of the GPL v2 or later.
 // This software is provided free of charge with a full "Money back" guarantee.
 // Use entirely at your own risk. We accept no liability. If you don't like that - don't use it.
 
-// Indended for use in applications that need to make images for web pages on the fly
-//
+// Intended for use in applications that need to make images for web pages on the fly
 
 
 #include <stdio.h>
@@ -438,7 +438,13 @@ ImageWriteGif (Image * i, int fh, int back, int trans, char *comment)
 {
    struct strPrivate p;
    p.fh = fh;
-   for (p.colbits = 2, p.cols = 4; p.cols < i->C; p.cols *= 2, p.colbits++);    // count colours, min 4
+   p.colbits = 2;               // Count colours, min 4
+   p.cols = 4;
+   while (p.cols < i->C)
+   {
+      p.cols *= 2;
+      p.colbits++;
+   }
    {                            // headers
       uint8_t buf[1500];
       int n = 0;
@@ -906,8 +912,8 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, char *comment, int z)
          n;
       uint8_t *p = i->Image;
       write (fh, &v, 4);
-      crc = writecrc (fh, "IDAT", 4, 0xFFFFFFFF);
-      crc = writecrc (fh, "\170\001", 2, crc);  // zlib header for deflate
+      crc = writecrc (fh, (unsigned char *) "IDAT", 4, 0xFFFFFFFF);
+      crc = writecrc (fh, (unsigned char *) "\170\001", 2, crc);        // zlib header for deflate
       n = i->H;
       while (n--)
       {
@@ -929,4 +935,242 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, char *comment, int z)
       write (fh, &v, 4);
    }
    writechunk (fh, "IEND", 0, 0);       // IEND
+}
+
+void
+PathInit (Path * p)
+{                               // Initialise a path
+   if (!p)
+      return;
+   p->last = 0;
+   p->skip = 0;
+   p->noskip = 0;
+   return;
+}
+
+static void
+PathDelta (Path * p)
+{
+   if (p->skipx == p->lastx)
+
+      snprintf (p->text, sizeof (p->text), "v%d", p->skipy - p->lasty);
+   else if (p->skipy == p->lasty)
+
+      snprintf (p->text, sizeof (p->text), "h%d", p->skipx - p->lastx);
+   else
+      snprintf (p->text, sizeof (p->text), "l%d,%d", p->skipx - p->lastx, p->skipy - p->lasty);
+   p->lastx = p->skipx;
+   p->lasty = p->skipy;
+}
+
+static int
+PathLine (Path * p, int x, int y)
+{
+   if (p->noskip)
+      return 0;                 // Don't skip any, e.g. marker-mid is used
+   if ((x == p->skipx && x == p->lastx && y > p->skipy && p->skipy > p->lasty) ||       //
+       (x == p->skipx && x == p->lastx && y < p->skipy && p->skipy < p->lasty) ||       //
+       (y == p->skipy && y == p->lasty && x > p->skipx && p->skipx > p->lastx) ||       //
+       (y == p->skipy && y == p->lasty && x < p->skipx && p->skipx < p->lastx))
+   {                            // Continuing along a line
+      p->skipx = x;
+      p->skipy = y;
+      return 1;
+   }
+   return 0;
+}
+
+char *
+PathPlot (Path * p, int x, int y)
+{                               // add a point, returns string to output or NULL
+   if (!p)
+      return NULL;
+   if (p->skip && p->skipx == x && p->skipy == y)
+      return NULL;              // Duh
+   if (!p->last && !p->skip)
+   {                            // Just record first point
+      p->initx = x;
+      p->inity = y;
+      p->skipx = x;
+      p->skipy = y;
+      p->skip = 1;
+      return NULL;
+   }
+   if (!p->last)
+   {                            // We have started, Set M for original point
+      p->lastx = p->skipx;
+      p->lasty = p->skipy;
+      p->last = 1;
+      p->skipx = x;
+      p->skipy = y;
+      snprintf (p->text, sizeof (p->text), "M%d,%d", p->lastx, p->lasty);
+      return p->text;
+   }
+   if (PathLine (p, x, y))
+      return NULL;
+   PathDelta (p);
+   p->skipx = x;
+   p->skipy = y;
+   return p->text;
+}
+
+char *
+PathDone (Path * p)
+{                               // finish path, returns string to output or NULL
+   if (!p)
+      return NULL;
+   if (!p->last)
+      return NULL;              // None, or one point, do nothing
+   PathLine (p, p->initx, p->inity);
+   if (p->skipx != p->initx || p->skipy != p->inity)
+   {
+      PathDelta (p);
+      p->last = 0;
+      p->skip = 0;
+      return p->text;
+   }
+   p->last = 0;
+   p->skip = 0;
+   return NULL;
+}
+
+void
+ImageSVGPath (Image * i,
+#ifdef	FIREBRICK
+              stream_h o,
+#else
+              FILE * o,
+#endif
+              int c
+#ifdef FIREBRICK
+              , heap_h heap
+#endif
+   )
+{
+   unsigned char *map = malloc (i->W * i->H);
+   if (!map)
+      return;
+   memset (map, 0, i->W * i->H);
+   int col (int x, int y)
+   {                            // Safe colour check of pixel
+      if (x < 0 || x >= i->W || y < 0 || y >= i->H)
+         return -1;
+      return ImagePixel (i, x, y);
+
+   }
+   int y;
+   for (y = 0; y < i->H; y++)
+   {
+      int x;
+      for (x = 0; x < i->W; x++)
+      {
+         if (col (x, y) != c)
+            continue;           // Not the colour I am drawing
+         int d = 0;             // Direction
+         const int dx[] = { 0, 1, 0, -1, 0, 1, 0 };     // Direction
+         const int dy[] = { -1, 0, 1, 0, -1, 0, 1 };
+         const int cx[] = { 1, 1, 0, 0, 1, 1, 0 };      // Corner
+         const int cy[] = { 0, 1, 1, 0, 0, 1, 1 };
+         for (d = 0; d < 4 && ((map[x + y * i->W] & (1 << d)) || col (x + dx[d], y + dy[d]) == c); d += 2);     // Can only be 0 or 2
+         if (d == 4)
+            continue;           // Middle of a block
+         Path p;
+         PathInit (&p);
+         char *t;
+         if (!d)
+         {                      // exterior, so start on corner to help optimisation
+            t = PathPlot (&p, x + cx[d + 3], y + cy[d + 3]);
+            if (t)
+               fprintf (o, "%s", t);
+         }
+         while (!(map[x + y * i->W] & (1 << d)))
+         {
+            t = PathPlot (&p, x + cx[d], y + cy[d]);
+            if (t)
+               fprintf (o, "%s", t);
+            map[x + y * i->W] |= (1 << d);
+            if (col (x + dx[d + 1] + dx[d], y + dy[d + 1] + dy[d]) == c)
+            {                   // Can turn left
+               x += dx[d + 1] + dx[d];
+               y += dy[d + 1] + dy[d];
+               d = ((d + 3) & 3);
+            } else if (col (x + dx[d + 1], y + dy[d + 1]) == c)
+            {                   // Can move right
+               x += dx[d + 1];
+               y += dy[d + 1];
+            } else
+            {                   // Turn right
+               d = ((d + 1) & 3);
+            }
+         }
+         t = PathDone (&p);
+         if (t)
+            fprintf (o, "%s", t);
+      }
+   }
+   free (map);
+}
+
+void
+ImageWriteSVG (Image * i,
+#ifdef	FIREBRICK
+               stream_h o,
+#else
+               int fh,
+#endif
+               int back, int trans, char *comment, double scale
+#ifdef FIREBRICK
+               , heap_h heap
+#endif
+   )
+{                               // Write image as SVG (path around pixels of each colour)
+#ifndef	FIREBRICK
+   FILE *o = fdopen (fh, "w");
+   if (!o)
+      return;
+#endif
+   fprintf (o, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
+   if (comment && !strstr (comment, "-->"))
+      fprintf (o, "<!-- %s -->\n", comment);
+   fprintf (o, "<svg xmlns:svg=\"http://www.w3.org/2000/svg\" xmlns=\"http://www.w3.org/2000/svg\" version=\"1.0\" ");
+   if (scale > 0)
+      fprintf (o, "width=\"%.2fmm\" height=\"%.2fmm\" viewBox=\"0 0 %d %d\"", (double) i->W * scale, (double) i->H * scale, i->W,
+               i->H);
+   else
+      fprintf (o, "width=\"%d\" height=\"%d\"", i->W, i->H);
+   fprintf (o, ">");
+   void addcolour (int c)
+   {
+      unsigned char r = (i->Colour[c] >> 16),
+         g = (i->Colour[c] >> 8),
+         b = (i->Colour[c]);
+      if (!(r % 17) && !(g % 17) && !(b % 17))
+         fprintf (o, "#%X%X%X", r / 17, g / 17, b / 17);
+      else
+         fprintf (o, "#%02X%02X%02X", r, g, b);
+   }
+   // Background colour 0, unless that is trans
+   if (back >= 0 && back != trans)
+   {
+      fprintf (o, "<rect width=\"%d\" height=\"%d\" fill=\"", i->W, i->H);
+      addcolour (0);
+      fprintf (o, "\"/>");
+   }
+   // Scan colours
+   int c;
+   for (c = 0; c < i->C; c++)
+      if (c != back && c != trans)
+      {
+         fprintf (o, "<path fill=\"");
+         addcolour (c);
+         fprintf (o, "\" d=\"");
+         ImageSVGPath (i, o, c
+#ifdef	FIREBRICK
+                       , h
+#endif
+            );
+         fprintf (o, "\"/>");
+      }
+   fprintf (o, "</svg>");
+   fflush (o);
 }
