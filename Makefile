@@ -1,2 +1,2 @@
 image.o: image.c
-	cc -O -c -o $@ $<
+	cc -O -c -o $@ $< -DLIB
