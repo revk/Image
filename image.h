@@ -54,8 +54,8 @@ typedef struct
 Image *ImageNew (int w, int h, int c);  // create a new blank image
 void ImageFree (Image * i);     // free an image
 void ImageWriteGif (Image * i, int fh, int back, int trans, char *comment);     // write image as a gif
-void ImageWritePNGz (Image * i, int fh, int back, int trans, char *comment, int z);     // write image as a gif
-#define ImageWritePNG(i,fh,back,trans,comment) ImageWritePNGz(i,fh,back,trans,comment,9)
+void ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm,char *comment, int z);     // write image as a png
+#define ImageWritePNG(i,fh,back,trans,comment) ImageWritePNGz(i,fh,back,trans,0,comment,9)
 void ImageWriteSVG (Image * i, int fh, int back, int trans, char *comment, double scale); // scale is mm per pixel, 0 for no scale just units
 void ImageSVGPath (Image * i, FILE * o, int c);
 void PathInit (Path * p);       // Initialise a path
