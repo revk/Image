@@ -1,5 +1,5 @@
 image.o: image.c
-	cc -O -c -o $@ $< -DLIB
+	gcc -O -c -o $@ $< -DLIB -I/usr/local/include -L/usr/local/lib
 
 update:
 	git submodule update --remote --merge
