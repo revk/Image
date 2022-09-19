@@ -331,7 +331,7 @@ typedef struct strPrivate
 {
    int cols;                    // number of colours, power of 2
    uint8_t colbits;             // number of bits for colours
-   int fh;                      // file handle
+   FILE *f;                      // file handle
    int lzwnext;                 // next code
    int lzwlast;                 // last code in current bit size
    int lzwbits;                 // current bit size
@@ -346,7 +346,7 @@ Private;
 static void
 LZWFlush (Private * p)
 {                               // flush this block
-   write (p->fh, p->block, *p->block + 1);
+   fwrite (p->block, *p->block + 1,1,p->f);
    *p->block = 0;
 }
 
@@ -383,8 +383,7 @@ LZWClear (Private * p)
 static void
 ImageStart (Private * p)
 {
-   uint8_t b = p->colbits;
-   write (p->fh, &b, 1);
+   fputc(p->colbits,p->f);
    *p->block = 0;
    p->blockb = 0;
    p->blockv = 0;
@@ -434,10 +433,10 @@ ImageOut (Private * p, uint8_t c)
 
 // write GIF image
 void
-ImageWriteGif (Image * i, int fh, int back, int trans, char *comment)
+ImageWriteGif (Image * i, FILE *f, int back, int trans, char *comment)
 {
    struct strPrivate p;
-   p.fh = fh;
+   p.f = f;
    p.colbits = 2;               // Count colours, min 4
    p.cols = 4;
    while (p.cols < i->C)
@@ -515,7 +514,7 @@ ImageWriteGif (Image * i, int fh, int back, int trans, char *comment)
 #else
       buf[n++] = 0x00;          // non interlaced, no local colour table
 #endif
-      write (fh, buf, n);
+      fwrite (buf, n,1,f);
    }
    // image data
    {
@@ -543,8 +542,8 @@ ImageWriteGif (Image * i, int fh, int back, int trans, char *comment)
 #endif
       ImageEnd (&p);
    }
-   write (fh, "\0", 1);         // end of image data
-   write (fh, "\x3B", 1);       // trailer
+   fputc (0, f);         // end of image data
+   fputc ('\x3B', f);       // trailer
 }
 
 void
@@ -789,25 +788,25 @@ crc (uint8_t * buf, int len)
 }
 
 uint32_t
-writecrc (int fh, uint8_t * ptr, int len, uint32_t c)
+writecrc (FILE *f, uint8_t * ptr, int len, uint32_t c)
 {
-   write (fh, ptr, len);
+   fwrite (ptr, len,1,f);
    while (len--)
       c = crc_table[(c ^ *ptr++) & 0xff] ^ (c >> 8);
    return c;
 }
 
 void
-writechunk (int fh, char *typ, void *ptr, int len)
+writechunk (FILE *f, char *typ, void *ptr, int len)
 {
    uint32_t v = htonl (len),
       crc;
-   write (fh, &v, 4);
-   crc = writecrc (fh, (uint8_t *) typ, 4, 0xFFFFFFFF);
+   fwrite ( &v, 4,1,f);
+   crc = writecrc (f, (uint8_t *) typ, 4, 0xFFFFFFFF);
    if (len)
-      crc = writecrc (fh, ptr, len, crc);
+      crc = writecrc (f, ptr, len, crc);
    v = htonl (~crc);
-   write (fh, &v, 4);
+   fwrite (&v, 4,1,f);
 }
 
 uint32_t
@@ -827,10 +826,10 @@ adlersum (uint8_t * p, int l, uint32_t adler)
 
 // write PNG image
 void
-ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *comment, int z)
+ImageWritePNGz (Image * i, FILE *f, int back, int trans, unsigned int dpm, char *comment, int z)
 {
    make_crc_table ();
-   write (fh, "\211PNG\r\n\032\n", 8);  // PNG header
+   fwrite ("\211PNG\r\n\032\n", 8,1,f);  // PNG header
    {                            // IHDR
       struct
       {
@@ -847,26 +846,26 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *
       0, 0, 8, 3, 0, 0};
       ihdr.width = htonl (i->W);
       ihdr.height = htonl (i->H);
-      writechunk (fh, "IHDR", &ihdr, 13);
+      writechunk (f, "IHDR", &ihdr, 13);
    }
    {                            // PLTE
       uint32_t v = htonl (i->C * 3),
          crc,
          n;
-      write (fh, &v, 4);
-      crc = writecrc (fh, (uint8_t *) "PLTE", 4, 0xFFFFFFFF);
+      fwrite ( &v, 4,1,f);
+      crc = writecrc (f, (uint8_t *) "PLTE", 4, 0xFFFFFFFF);
       for (n = 0; n < i->C; n++)
       {
          v = htonl (i->Colour[n] << 8);
-         crc = writecrc (fh, (void *) &v, 3, crc);
+         crc = writecrc (f, (void *) &v, 3, crc);
       }
       v = htonl (~crc);
-      write (fh, &v, 4);
+      fwrite (&v, 4,1,f);
    }
    if (back >= 0)
    {                            // bKGD
       uint8_t b = back;
-      writechunk (fh, "bKGD", &b, 1);
+      writechunk (f, "bKGD", &b, 1);
    }
    if (dpm >= 0)
    {                            // Pixels per metre
@@ -879,19 +878,19 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *
       phys =
       {
       htonl (dpm), htonl (dpm), 1};
-      writechunk (fh, "pHYs", &phys, 9);
+      writechunk (f, "pHYs", &phys, 9);
    }
    if (*comment)
    {                            // tEXt
       char c[] = "Comment";
       uint32_t v = htonl (strlen (c) + strlen (comment) + 1),
          crc;
-      write (fh, &v, 4);
-      crc = writecrc (fh, (uint8_t *) "tEXt", 4, 0xFFFFFFFF);
-      crc = writecrc (fh, (uint8_t *) c, strlen (c) + 1, crc);
-      crc = writecrc (fh, (uint8_t *) comment, strlen (comment), crc);
+      fwrite ( &v, 4,1,f);
+      crc = writecrc (f, (uint8_t *) "tEXt", 4, 0xFFFFFFFF);
+      crc = writecrc (f, (uint8_t *) c, strlen (c) + 1, crc);
+      crc = writecrc (f, (uint8_t *) comment, strlen (comment), crc);
       v = htonl (~crc);
-      write (fh, &v, 4);
+      fwrite (&v, 4,1,f);
    }
    {                            // tRNS
       uint8_t alpha[256];
@@ -900,7 +899,7 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *
          alpha[n] = 255 - (i->Colour[n] >> 24); // 4th palette byte treated as 0=opaque, 255-transparrent
       if (trans >= 0 && trans < i->C)
          alpha[trans] = 0;      // manual set of specific transparrent colour
-      writechunk (fh, "tRNS", alpha, i->C);
+      writechunk (f, "tRNS", alpha, i->C);
    }
 #ifdef USEZLIB
    if (z)
@@ -914,7 +913,7 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *
       if (compress2 (temp, &n, i->Image, i->L * i->H, z) != Z_OK)
          fprintf (stderr, "Deflate error\n");
       else
-         writechunk (fh, "IDAT", temp, n);
+         writechunk (f, "IDAT", temp, n);
       free (temp);
    } else
 #endif
@@ -924,9 +923,9 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *
          adler = 1,
          n;
       uint8_t *p = i->Image;
-      write (fh, &v, 4);
-      crc = writecrc (fh, (unsigned char *) "IDAT", 4, 0xFFFFFFFF);
-      crc = writecrc (fh, (unsigned char *) "\170\001", 2, crc);        // zlib header for deflate
+      fwrite (&v, 4,1,f);
+      crc = writecrc (f, (unsigned char *) "IDAT", 4, 0xFFFFFFFF);
+      crc = writecrc (f, (unsigned char *) "\170\001", 2, crc);        // zlib header for deflate
       n = i->H;
       while (n--)
       {
@@ -937,17 +936,17 @@ ImageWritePNGz (Image * i, int fh, int back, int trans, unsigned int dpm, char *
          h[3] = ~(i->L & 255);  // Inverse of Len
          h[4] = ~(i->L / 256);
          *p = 0;                // filter 0 (NONE)
-         crc = writecrc (fh, h, 5, crc);
-         crc = writecrc (fh, p, i->L, crc);
+         crc = writecrc (f, h, 5, crc);
+         crc = writecrc (f, p, i->L, crc);
          adler = adlersum (p, i->L, adler);
          p += i->L;
       }
       v = htonl (adler);
-      crc = writecrc (fh, (void *) &v, 4, crc);
+      crc = writecrc (f, (void *) &v, 4, crc);
       v = htonl (~crc);
-      write (fh, &v, 4);
+      fwrite ( &v, 4,1,f);
    }
-   writechunk (fh, "IEND", 0, 0);       // IEND
+   writechunk (f, "IEND", 0, 0);       // IEND
 }
 
 void
@@ -1129,7 +1128,7 @@ ImageWriteSVG (Image * i,
 #ifdef	FIREBRICK
                stream_h o,
 #else
-               int fh,
+               FILE *o,
 #endif
                int back, int trans, char *comment, double scale
 #ifdef FIREBRICK
@@ -1137,11 +1136,6 @@ ImageWriteSVG (Image * i,
 #endif
    )
 {                               // Write image as SVG (path around pixels of each colour)
-#ifndef	FIREBRICK
-   FILE *o = fdopen (fh, "w");
-   if (!o)
-      return;
-#endif
    fprintf (o, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
    if (comment && !strstr (comment, "-->"))
       fprintf (o, "<!-- %s -->\n", comment);
